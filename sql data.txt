@@ -1,0 +1,95 @@
+create table public.creator (
+  id serial not null,
+  username character varying(80) not null,
+  email character varying(120) not null,
+  password_hash character varying(128) not null,
+  nickname character varying(80) null,
+  bio text null,
+  phone character varying(20) null,
+  join_date date not null,
+  profile_completed boolean null default false,
+  constraint creator_pkey primary key (id),
+  constraint creator_email_key unique (email),
+  constraint creator_username_key unique (username)
+) TABLESPACE pg_default;
+
+create table public.brand (
+  id serial not null,
+  username character varying(80) not null,
+  email character varying(120) not null,
+  password_hash character varying(128) not null,
+  constraint brand_pkey primary key (id),
+  constraint brand_email_key unique (email),
+  constraint brand_username_key unique (username)
+) TABLESPACE pg_default;
+
+create table public.campaign (
+  id serial not null,
+  brand_id integer not null,
+  platform character varying(50) not null,
+  budget double precision not null,
+  cpv double precision not null,
+  hashtag character varying(100) null,
+  audio character varying(200) null,
+  deadline date not null,
+  name character varying(120) not null,
+  is_active boolean null default true,
+  total_view_count integer null default 0,
+  requirements text null,
+  view_threshold integer null default 0,
+  asset_link character varying null,
+  category character varying(20) not null default 'fashion_clothing'::character varying,
+  image_url text null,
+  constraint campaign_pkey primary key (id),
+  constraint fk_brand foreign KEY (brand_id) references brand (id) on delete CASCADE,
+  constraint check_image_url_format check ((image_url ~* '^https?://.*'::text)),
+  constraint valid_category check (
+    (
+      (category)::text = any (
+        array[
+          ('fashion_clothing'::character varying)::text,
+          ('beauty_products'::character varying)::text,
+          ('youtube'::character varying)::text
+        ]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+create table public.accepted_clips (
+  id serial not null,
+  creator_id integer not null,
+  campaign_id integer not null,
+  clip_url character varying(300) not null,
+  submitted_at timestamp without time zone null default CURRENT_TIMESTAMP,
+  media_id character varying(100) null,
+  view_count integer null,
+  caption text null,
+  instagram_posted_at timestamp without time zone null,
+  constraint accepted_clips_pkey primary key (id),
+  constraint fk_campaign_accepted foreign KEY (campaign_id) references campaign (id) on delete CASCADE,
+  constraint fk_creator_accepted foreign KEY (creator_id) references creator (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create table public.submitted_clips (
+  id serial not null,
+  creator_id integer not null,
+  campaign_id integer not null,
+  clip_url character varying(300) not null,
+  submitted_at timestamp without time zone null default CURRENT_TIMESTAMP,
+  is_deleted_by_admin boolean null default false,
+  feedback character varying(255) null,
+  constraint submitted_clips_pkey primary key (id),
+  constraint fk_campaign_submitted foreign KEY (campaign_id) references campaign (id) on delete CASCADE,
+  constraint fk_creator_submitted foreign KEY (creator_id) references creator (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create table public.admin (
+  id serial not null,
+  username character varying(80) not null,
+  email character varying(120) not null,
+  password_hash character varying(128) not null,
+  constraint admin_pkey primary key (id),
+  constraint admin_email_key unique (email),
+  constraint admin_username_key unique (username)
+) TABLESPACE pg_default;
