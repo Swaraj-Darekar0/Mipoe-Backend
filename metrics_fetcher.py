@@ -130,43 +130,68 @@ def fetch_and_update_metrics():
             continue
 
         try:
-            # Convert the alphanumeric media_id to its numeric primary key
+            # 1. Get the Numeric Media PK
             media_pk = cl.media_pk_from_code(media_id)
-            media_info = cl.media_info(media_pk)
             
+            # Initialize variables
+            view_count = 0
+            caption_text = ""
+            posted_at_iso = None
+
+            try:
+                # 2. Try the Standard Method (Strict Validation)
+                media_info = cl.media_info(media_pk)
+                
+                view_count = media_info.play_count
+                caption_text = media_info.caption_text
+                if media_info.taken_at:
+                    posted_at_iso = media_info.taken_at.isoformat()
+
+            except ValidationError:
+                # 3. FALLBACK: Fetch Raw JSON (Bypass Validation Bug)
+                print(f"⚠️ Validation error for {media_id}. Using raw data fallback...")
+                
+                # Fetch raw data directly from the private API endpoint
+                raw_data = cl.private_request(f"media/{media_pk}/info/")
+                
+                # Extract manually from dictionary (Ignores 'audio_filter_infos' errors)
+                item = raw_data['items'][0]
+                view_count = item.get('play_count') or item.get('view_count', 0)
+                
+                # Extract caption safely
+                caption_obj = item.get('caption')
+                if caption_obj:
+                    caption_text = caption_obj.get('text', "")
+                
+                # Extract timestamp
+                timestamp = item.get('taken_at')
+                if timestamp:
+                    posted_at_iso = datetime.fromtimestamp(timestamp).isoformat()
+
             # Prepare updates
             updates = {
-                'view_count': media_info.play_count,
+                'view_count': view_count,
                 'media_id': media_id,
-                'instagram_posted_at': media_info.taken_at.isoformat() if media_info.taken_at else None,
-                'caption': media_info.caption_text
+                'instagram_posted_at': posted_at_iso,
+                'caption': caption_text
             }
 
             # Update clip metrics in Supabase
             if update_clip_metrics(clip['id'], updates):
                 print(f"Updated metrics for clip ID {clip['id']} (Media ID: {media_id}). "
-                      f"View Count: {media_info.play_count}, "
-                      f"Caption: {(media_info.caption_text or '')[:50]}..., "
-                      f"Posted At: {media_info.taken_at}")
+                      f"View Count: {view_count}")
                 
-                # Track campaigns that need view count updates
                 if clip.get('campaign_id'):
                     processed_campaigns.add(clip['campaign_id'])
             
-            time.sleep(2)  # Be polite to the API, avoid hitting rate limits
-        
-        except ValidationError as e:
-            print(f"Error fetching metrics for clip ID {clip.get('id')} (Media ID: {media_id}): Data validation error - {e}")
-            print(f"Skipping clip {clip.get('id')}. The returned data from Instagram is not as expected.")
-            continue
+            time.sleep(2)  # Be polite to the API
         
         except ClientError as e:
-            print(f"Error fetching metrics for clip ID {clip.get('id')} (Media ID: {media_id}): Client error - {e}")
-            print(f"Skipping clip {clip.get('id')}.")
+            print(f"Error fetching metrics for clip ID {clip.get('id')}: Client error - {e}")
             continue
 
         except Exception as e:
-            print(f"Error fetching metrics for clip ID {clip.get('id')} (Media ID: {media_id}): Unexpected error - {e}")
+            print(f"Error fetching metrics for clip ID {clip.get('id')}: Unexpected error - {e}")
             continue
     
     # Update view counts for all affected campaigns

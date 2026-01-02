@@ -1,5 +1,5 @@
 create table public.creator (
-  id serial not null,
+  id uuid references auth.users not null primary key,
   username character varying(80) not null,
   email character varying(120) not null,
   password_hash character varying(128) not null,
@@ -8,20 +8,37 @@ create table public.creator (
   phone character varying(20) null,
   join_date date not null,
   profile_completed boolean null default false,
+  wallet_balance double precision null default 0.0,
+  payout_method character varying(10) null default null::character varying,
+  upi_id character varying(255) null default null::character varying,
+  bank_account character varying(20) null default null::character varying,
+  ifsc character varying(11) null default null::character varying,
+  account_holder_name character varying(255) null default null::character varying,
+  notifications jsonb[] null default '{}'::jsonb[],
   constraint creator_pkey primary key (id),
   constraint creator_email_key unique (email),
   constraint creator_username_key unique (username)
 ) TABLESPACE pg_default;
+create index IF not exists idx_creator_wallet on public.creator using btree (id, wallet_balance) TABLESPACE pg_default;
+create index IF not exists idx_creator_payout_method on public.creator using btree (payout_method) TABLESPACE pg_default;
 
 create table public.brand (
   id serial not null,
   username character varying(80) not null,
   email character varying(120) not null,
   password_hash character varying(128) not null,
+  wallet_balance double precision null default 0.0,
+  virtual_acc_number text null,
+  virtual_acc_ifsc text null,
+  virtual_vpa_id text null,
+  phone character varying(20) null,
   constraint brand_pkey primary key (id),
   constraint brand_email_key unique (email),
   constraint brand_username_key unique (username)
 ) TABLESPACE pg_default;
+create index IF not exists idx_brand_virtual_acc on public.brand using btree (virtual_acc_number) TABLESPACE pg_default;
+create index IF not exists idx_brand_wallet on public.brand using btree (id, wallet_balance) TABLESPACE pg_default;
+
 
 create table public.campaign (
   id serial not null,
@@ -40,8 +57,11 @@ create table public.campaign (
   asset_link character varying null,
   category character varying(20) not null default 'fashion_clothing'::character varying,
   image_url text null,
+  funds_allocated double precision null default 0.0,
+  funds_distributed double precision null default 0.0,
   constraint campaign_pkey primary key (id),
   constraint fk_brand foreign KEY (brand_id) references brand (id) on delete CASCADE,
+  constraint check_funds_distributed check ((funds_distributed <= funds_allocated)),
   constraint check_image_url_format check ((image_url ~* '^https?://.*'::text)),
   constraint valid_category check (
     (
@@ -55,6 +75,8 @@ create table public.campaign (
     )
   )
 ) TABLESPACE pg_default;
+create index IF not exists idx_campaign_funds_allocated on public.campaign using btree (id, funds_allocated) TABLESPACE pg_default;
+create index IF not exists idx_campaign_funds_distributed on public.campaign using btree (id, funds_distributed) TABLESPACE pg_default;
 
 create table public.accepted_clips (
   id serial not null,
@@ -66,10 +88,13 @@ create table public.accepted_clips (
   view_count integer null,
   caption text null,
   instagram_posted_at timestamp without time zone null,
+  last_view_count integer null default 0,
+  amount_paid double precision null default 0.0,
   constraint accepted_clips_pkey primary key (id),
   constraint fk_campaign_accepted foreign KEY (campaign_id) references campaign (id) on delete CASCADE,
   constraint fk_creator_accepted foreign KEY (creator_id) references creator (id) on delete CASCADE
 ) TABLESPACE pg_default;
+create index IF not exists idx_accepted_clips_amount_paid on public.accepted_clips using btree (campaign_id, amount_paid) TABLESPACE pg_default;
 
 create table public.submitted_clips (
   id serial not null,
@@ -93,3 +118,151 @@ create table public.admin (
   constraint admin_email_key unique (email),
   constraint admin_username_key unique (username)
 ) TABLESPACE pg_default;
+
+
+create table public.brand_transactions (
+  id serial not null,
+  brand_id integer not null,
+  campaign_id integer null,
+  type public.brand_transaction_type not null,
+  amount double precision not null,
+  status public.transaction_status not null default 'pending'::transaction_status,
+  description text null,
+  external_txn_id text null,
+  refund_audit_id integer null,
+  created_at timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
+  constraint brand_transactions_pkey primary key (id),
+  constraint brand_transactions_brand_id_fkey foreign KEY (brand_id) references brand (id) on delete CASCADE,
+  constraint brand_transactions_campaign_id_fkey foreign KEY (campaign_id) references campaign (id) on delete set null,
+  constraint brand_transactions_refund_audit_id_fkey foreign KEY (refund_audit_id) references refund_audits (id) on delete set null
+) TABLESPACE pg_default;
+create index IF not exists brand_transactions_brand_id_idx on public.brand_transactions using btree (brand_id) TABLESPACE pg_default;
+create index IF not exists brand_transactions_campaign_id_idx on public.brand_transactions using btree (campaign_id) TABLESPACE pg_default;
+create index IF not exists brand_transactions_type_idx on public.brand_transactions using btree (type) TABLESPACE pg_default;
+
+create table public.creator_transactions (
+  id serial not null,
+  creator_id integer not null,
+  campaign_id integer null,
+  type public.creator_transaction_type not null,
+  amount double precision not null,
+  status public.transaction_status not null default 'pending'::transaction_status,
+  description text null,
+  external_txn_id text null,
+  payout_method text null,
+  utr text null,
+  created_at timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
+  constraint creator_transactions_pkey primary key (id),
+  constraint creator_transactions_campaign_id_fkey foreign KEY (campaign_id) references campaign (id) on delete set null,
+  constraint creator_transactions_creator_id_fkey foreign KEY (creator_id) references creator (id) on delete CASCADE
+) TABLESPACE pg_default;
+create index IF not exists creator_transactions_creator_id_idx on public.creator_transactions using btree (creator_id) TABLESPACE pg_default;
+create index IF not exists creator_transactions_campaign_id_idx on public.creator_transactions using btree (campaign_id) TABLESPACE pg_default;
+create index IF not exists creator_transactions_type_idx on public.creator_transactions using btree (type) TABLESPACE pg_default;
+
+
+create table public.platform_wallet (
+  id serial not null,
+  balance double precision null default 0.0,
+  updated_at timestamp with time zone null default now(),
+  constraint platform_wallet_pkey primary key (id)
+) TABLESPACE pg_default;
+
+create table public.refund_audits (
+  id serial not null,
+  brand_id integer not null,
+  campaign_id integer not null,
+  refund_type character varying(50) not null,
+  requested_amount numeric(10, 2) not null,
+  allocated_amount numeric(10, 2) not null,
+  distributed_amount numeric(10, 2) not null,
+  refundable_amount numeric(10, 2) not null,
+  approved_amount numeric(10, 2) null,
+  status character varying(20) null default 'pending'::character varying,
+  reason character varying(500) not null,
+  rejection_reason character varying(500) null,
+  processed_by_admin_id integer null,
+  external_txn_id character varying(255) null,
+  metadata jsonb null default '{}'::jsonb,
+  created_at timestamp without time zone null default CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone null default CURRENT_TIMESTAMP,
+  completed_at timestamp without time zone null,
+  constraint refund_audits_pkey primary key (id),
+  constraint refund_audits_brand_id_fkey foreign KEY (brand_id) references brand (id) on delete CASCADE,
+  constraint refund_audits_campaign_id_fkey foreign KEY (campaign_id) references campaign (id) on delete CASCADE,
+  constraint refund_audits_processed_by_admin_id_fkey foreign KEY (processed_by_admin_id) references admin (id) on delete set null
+) TABLESPACE pg_default;
+create index IF not exists idx_refund_audits_brand_id on public.refund_audits using btree (brand_id) TABLESPACE pg_default;
+create index IF not exists idx_refund_audits_campaign_id on public.refund_audits using btree (campaign_id) TABLESPACE pg_default;
+create index IF not exists idx_refund_audits_status on public.refund_audits using btree (status) TABLESPACE pg_default;
+create index IF not exists idx_refund_audits_created_at on public.refund_audits using btree (created_at desc) TABLESPACE pg_default;
+
+
+
+//Brand Transaction view
+ SELECT bt.brand_id,
+    NULL::integer AS creator_id,
+    bt.campaign_id,
+    bt.created_at,
+    bt.description,
+    bt.type::text AS type,
+    bt.amount,
+    bt.status,
+    bt.id,
+    NULL::text AS payout_method,
+    NULL::text AS utr,
+    bt.external_txn_id,
+    NULL::text AS creator_username,
+    NULL::text AS campaign_name
+   FROM brand_transactions bt
+UNION ALL
+ SELECT c.brand_id,
+    ct.creator_id,
+    ct.campaign_id,
+    ct.created_at,
+    ct.description,
+    'distribution'::text AS type,
+    - ct.amount AS amount,
+    ct.status,
+    ct.id,
+    ct.payout_method,
+    ct.utr,
+    ct.external_txn_id,
+    NULL::text AS creator_username,
+    NULL::text AS campaign_name
+   FROM creator_transactions ct
+     JOIN campaign c ON ct.campaign_id = c.id
+  WHERE ct.type = 'earning'::creator_transaction_type;
+
+
+  //detailed Brand creator Trnsaction view 
+   SELECT b_view.brand_id,
+    b_view.creator_id,
+    b_view.campaign_id,
+    b_view.created_at,
+    b_view.description,
+    b_view.type,
+    b_view.amount,
+    b_view.status,
+    b_view.id,
+    b_view.external_txn_id,
+    COALESCE(c.name, 'N/A'::character varying) AS campaign_name,
+    COALESCE(cr.username, 'N/A'::character varying) AS creator_username
+   FROM brand_transaction_view b_view
+     LEFT JOIN campaign c ON b_view.campaign_id = c.id
+     LEFT JOIN creator cr ON b_view.creator_id = cr.id;
+
+
+
+///refund summary view 
+ SELECT c.id AS campaign_id,
+    c.name AS campaign_name,
+    b.id AS brand_id,
+    count(ra.id) FILTER (WHERE ra.status::text = 'completed'::text) AS total_refunds_completed,
+    COALESCE(sum(ra.approved_amount) FILTER (WHERE ra.status::text = 'completed'::text), 0::numeric) AS total_refunded_amount,
+    count(ra.id) FILTER (WHERE ra.status::text = 'pending'::text) AS pending_refund_requests,
+    COALESCE(sum(ra.requested_amount) FILTER (WHERE ra.status::text = 'pending'::text), 0::numeric) AS pending_refund_total
+   FROM campaign c
+     JOIN brand b ON c.brand_id = b.id
+     LEFT JOIN refund_audits ra ON c.id = ra.campaign_id
+  GROUP BY c.id, c.name, b.id;

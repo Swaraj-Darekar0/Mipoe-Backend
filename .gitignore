@@ -1,0 +1,14 @@
+# Node modules and package manager logs
+
+# Environment files (do not commit secrets)
+.env
+.env.*
+!.env.example
+.env.example
+
+# Optional OS / IDE files
+.DS_Store
+.vscode/
+.idea/
+._pycache_/
+.instagram/

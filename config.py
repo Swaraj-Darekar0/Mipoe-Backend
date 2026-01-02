@@ -15,7 +15,9 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'supersecretkey'
     # AES encryption key (32 bytes for AES-256)
     TOKEN_CRYPT_KEY = os.environ.get('TOKEN_CRYPT_KEY', '32_byte_hex_or_base64_key_here')
-
+    
+    
+    
     # Celery & Redis
     CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
     CELERY_RESULT_BACKEND = CELERY_BROKER_URL
@@ -26,4 +28,12 @@ class Config:
     # For local development we increase it to one day so you don't have to
     # re-login constantly while testing.
     # ---------------------------------------------------------------------
-    JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=1) 
+    JWT_SECRET_KEY=os.getenv('JWT_SECRET_KEY')
+     # Add this for debugging
+    JWT_TOKEN_LOCATION = ['headers']
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=60)
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
+    JWT_BLACKLIST_ENABLED = True
+    JWT_BLACKLIST_TOKEN_CHECKS = ['access', 'refresh']
+    JWT_ALGORITHM=os.getenv('JWT_ALGORITHM', 'HS256')
+    JWT_IDENTITY_CLAIM = 'sub'
