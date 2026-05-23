@@ -13,10 +13,13 @@ from supabase_auth.errors import AuthApiError
 import requests
 from utils import encrypt_token, decrypt_token
 import re
+import random
+import string
 from supabase import create_client, Client
 from urllib.parse import unquote 
 from routes.payments import payments_bp
 from routes.instagramVerifier import verify_instagram_username
+from postgrest.exceptions import APIError
 
 
 
@@ -39,6 +42,64 @@ jwt = JWTManager(app)
 # This in-memory set will store the JTI of revoked tokens.
 # For production, use a persistent store like Redis or a database.
 blocklist = set()
+
+
+def get_profile_table(role):
+    table_map = {
+        'brand': 'brand',
+        'creator': 'creator',
+        'admin': 'admin'
+    }
+    return table_map.get(role)
+
+
+def get_profile_by_email(role, email):
+    table_name = get_profile_table(role)
+    if not table_name:
+        raise ValueError(f"Unsupported role: {role}")
+
+    select_fields = 'id, username'
+    if role == 'creator':
+        select_fields += ', profile_completed'
+
+    response = supabase.table(table_name).select(select_fields).eq('email', email).limit(1).execute()
+    return response.data[0] if response.data else None
+
+
+def ensure_profile_exists(role, email, username):
+    table_name = get_profile_table(role)
+    if not table_name:
+        raise ValueError(f"Unsupported role: {role}")
+
+    existing_profile = get_profile_by_email(role, email)
+    if existing_profile:
+        return existing_profile
+
+    new_profile = {
+        'email': email,
+        'username': username,
+        'password_hash': 'supabase_auth_managed'
+    }
+
+    if role == 'creator':
+        new_profile['join_date'] = datetime.utcnow().strftime('%Y-%m-%d')
+        new_profile['profile_completed'] = False
+
+    try:
+        insert_response = supabase.table(table_name).insert([new_profile]).execute()
+        if not insert_response.data:
+            raise ValueError(f"Failed to create {role} profile")
+        return insert_response.data[0]
+    except APIError as api_error:
+        if getattr(api_error, 'code', None) == '23505':
+            profile = get_profile_by_email(role, email)
+            if profile:
+                return profile
+        raise
+
+
+def get_current_user_id():
+    return int(get_jwt_identity())
 
 @jwt.token_in_blocklist_loader
 def check_if_token_in_blocklist(jwt_header, jwt_payload: dict):
@@ -86,7 +147,6 @@ def register():
              return jsonify({'msg': 'Invalid role'}), 400
 
         # 1. Sign up with Supabase Auth
-        # The SQL TRIGGER you created will automatically insert into public.brand/creator
         try:
             auth_response = supabase.auth.sign_up({
                 "email": email,
@@ -99,11 +159,12 @@ def register():
                 }
             })
             
-            # If successful, auth_response.user will exist
             if auth_response.user:
+                profile = ensure_profile_exists(role, email, username)
                 return jsonify({
-                    'msg': 'User registered successfully', 
-                    'user_id': auth_response.user.id
+                    'msg': 'User registered successfully',
+                    'user_id': str(profile['id']),
+                    'auth_user_id': auth_response.user.id
                 }), 201
 
                 
@@ -154,30 +215,38 @@ def login():
 
         # 2. Extract User Info from Supabase
         user = auth_response.user
-        user_id = user.id
+        auth_user_id = user.id
         
-        # 3. Retrieve Role/Username from Metadata
-        role = user.user_metadata.get('role')
-        username = user.user_metadata.get('username')
+        # 3. Retrieve role/username and resolve the matching public profile row
+        role = user.user_metadata.get('role') or data.get('role')
+        username = user.user_metadata.get('username') or email.split('@')[0]
+
+        if role not in ['brand', 'creator', 'admin']:
+            return jsonify({'msg': 'Invalid or missing role on user account'}), 400
+
+        profile = ensure_profile_exists(role, email, username)
+        internal_user_id = profile['id']
+        resolved_username = profile.get('username') or username
 
         # 4. Create tokens with flask-jwt-extended
-        additional_claims = {"role": role, "username": username}
-        access_token = create_access_token(identity=user_id, additional_claims=additional_claims)
-        refresh_token = create_refresh_token(identity=user_id, additional_claims=additional_claims)
+        additional_claims = {
+            "role": role,
+            "username": resolved_username,
+            "auth_user_id": auth_user_id
+        }
+        access_token = create_access_token(identity=str(internal_user_id), additional_claims=additional_claims)
+        refresh_token = create_refresh_token(identity=str(internal_user_id), additional_claims=additional_claims)
         
         # 5. (Optional) Check Profile Completion for Creators
-        profile_completed = False
-        if role == 'creator':
-             res = supabase.table('creator').select('profile_completed').eq('id', user_id).execute()
-             if res.data:
-                 profile_completed = res.data[0].get('profile_completed', False)
+        profile_completed = bool(profile.get('profile_completed', False)) if role == 'creator' else False
 
         return jsonify({
             'access_token': access_token,
             'refresh_token': refresh_token,
             'role': role,
-            'username': username,
-            'user_id': user_id,
+            'username': resolved_username,
+            'user_id': str(internal_user_id),
+            'auth_user_id': auth_user_id,
             'profile_completed': profile_completed
         }), 200
 
@@ -190,7 +259,7 @@ def login():
 @app.route("/verify-instagram/", methods=["POST"])
 @jwt_required()
 def verify_instagram():
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     claims = get_jwt()
     if claims.get('role') != 'creator':
         return jsonify({'msg': 'Only creators can verify Instagram accounts'}), 403
@@ -250,7 +319,7 @@ def create_campaign():
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     try:
         data = request.json
         # Note: image_url is optional here so old validations don't break immediately
@@ -294,7 +363,7 @@ def list_campaigns():
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     try:
         response = supabase.table('campaign').select('*').eq('brand_id', brand_id).execute()
         campaigns_data = response.data
@@ -498,7 +567,7 @@ def get_creator_campaigns():
     if user_role != 'creator':
         print(f"Unauthorized access to creator campaigns. Role in token: {claims.get('role')}") # Debugging line
         return jsonify({'msg': 'Unauthorized'}), 403
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     try:
         # Fetch campaigns that the creator has submitted clips for, or that are active.
         # This will get all campaigns a creator is associated with (either submitted a clip or accepted).
@@ -587,7 +656,7 @@ def submit_clip():
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     
     try:
         data = request.json
@@ -659,7 +728,7 @@ def get_creator_clips_for_campaign():
     user_role = claims.get('role')
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     campaign_id = request.args.get('campaign_id', type=int)
 
     if not campaign_id:
@@ -724,7 +793,7 @@ def get_accepted_clip_details(submitted_clip_id):
     user_role = claims.get('role')
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
 
     try:
         # Fetch the accepted clip using the submitted_clip_id
@@ -767,7 +836,7 @@ def delete_campaign(campaign_id):
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         # 1. Fetch Details BEFORE deleting (Need image_url AND funds_allocated)
@@ -839,7 +908,7 @@ def delete_clip(clip_id):
     user_role = claims.get('role')
     if not user_role or user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
 
     try:
         # OPTIMIZATION 1: Single-Step Delete for Submitted Clips
@@ -1081,7 +1150,7 @@ def get_creator_profile():
     user_role = claims.get('role')
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     try:
         # Select only the relevant profile fields
         response = supabase.table('creator').select(
@@ -1115,7 +1184,7 @@ def update_creator_profile():
     user_role = claims.get('role')
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     try:
         data = request.json
         update_fields = {}
@@ -1167,7 +1236,7 @@ def update_campaign_image(campaign_id):
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         data = request.json
@@ -1201,7 +1270,7 @@ def update_campaign_budget(campaign_id):
     
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         data = request.json
@@ -1232,7 +1301,7 @@ def update_campaign_requirements(campaign_id):
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         data = request.json
@@ -1261,7 +1330,7 @@ def update_campaign_status(campaign_id):
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         data = request.json
@@ -1292,7 +1361,7 @@ def update_campaign_view_threshold(campaign_id):
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         data = request.json
@@ -1323,7 +1392,7 @@ def update_campaign_deadline(campaign_id):
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         data = request.json
@@ -1368,7 +1437,7 @@ def get_pending_payouts(campaign_id):
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     
     try:
         # 1. Verify campaign belongs to brand
@@ -1457,7 +1526,7 @@ def get_brand_profile():
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         response = supabase.table('brand').select('id, username, email, phone').eq('id', brand_id).limit(1).execute()
@@ -1484,7 +1553,7 @@ def update_brand_profile():
     user_role = claims.get('role')
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
 
     update_fields = {}
@@ -1727,11 +1796,6 @@ def get_campaign_performance_analytics(campaign_id):
     except Exception as e:
         print(f"Get campaign performance analytics error: {str(e)}")
         return jsonify({'msg': 'Failed to retrieve analytics', 'error': str(e)}), 500
-
-
-import random 
-import string
-from postgrest.exceptions import APIError
 
 @app.route('/api/auth/google-sync', methods=['POST'])
 @jwt_required()

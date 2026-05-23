@@ -1,5 +1,5 @@
 from app import app                        # re-uses the configured Flask app
-from models import bcrypt, Admin # Only import bcrypt and Admin model
+from models import Admin # Only import Admin model
 from config import Config
 from supabase import create_client, Client
 
@@ -13,14 +13,11 @@ admin_username = "MainAdmin"
 admin_email = "admin@gmail.com"
 admin_password = "swaraj"
 
-# Hash the password
-hashed_password = bcrypt.generate_password_hash(admin_password).decode('utf-8')
-
 # Prepare data for Supabase insertion
 new_admin = {
     "username": admin_username,
     "email": admin_email,
-    "password_hash": hashed_password
+    "password_hash": admin_password
 }
 
 try:

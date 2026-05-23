@@ -1,7 +1,4 @@
-from flask_bcrypt import Bcrypt
 from datetime import datetime
-
-bcrypt = Bcrypt()
 
 class Brand:
     def __init__(self, id=None, username=None, email=None, password_hash=None):
@@ -11,10 +8,10 @@ class Brand:
         self.password_hash = password_hash
 
     def set_password(self, password):
-        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+        self.password_hash = password
 
     def check_password(self, password):
-        return bcrypt.check_password_hash(self.password_hash, password)
+        return self.password_hash == password
 
 class Creator:
     def __init__(self, id=None, username=None, email=None, password_hash=None, profile_completed=False,
@@ -30,10 +27,10 @@ class Creator:
         self.join_date = join_date if join_date else datetime.utcnow().date() # Default to today's date
 
     def set_password(self, password):
-        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+        self.password_hash = password
 
     def check_password(self, password):
-        return bcrypt.check_password_hash(self.password_hash, password)
+        return self.password_hash == password
 
 class Admin:
     def __init__(self, id=None, username=None, email=None, password_hash=None):
@@ -43,10 +40,10 @@ class Admin:
         self.password_hash = password_hash
 
     def set_password(self, password):
-        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+        self.password_hash = password
 
     def check_password(self, password):
-        return bcrypt.check_password_hash(self.password_hash, password)
+        return self.password_hash == password
 
 class Campaign:
     def __init__(self, id=None, brand_id=None, platform=None, budget=None, cpv=None, hashtag=None, 

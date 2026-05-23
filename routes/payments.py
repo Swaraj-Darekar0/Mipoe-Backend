@@ -39,6 +39,10 @@ def get_cashfree_headers():
         "x-client-secret": CASHFREE_SECRET_KEY
     }
 
+
+def get_current_user_id():
+    return int(get_jwt_identity())
+
 # ==========================================
 # SECTION A: CASHFREE DEPOSITS (Money In)
 # ==========================================
@@ -52,7 +56,7 @@ def create_deposit_order():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     amount = data.get('amount')
 
@@ -124,7 +128,7 @@ def verify_deposit():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     order_id = data.get('order_id')
 
@@ -195,7 +199,7 @@ def get_virtual_account():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
 
     try:
         # 1. Check if VA exists in DB
@@ -244,7 +248,7 @@ def get_wallet_balance():
     claims = get_jwt()
     
     role = claims.get('role')
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
 
     
 
@@ -272,7 +276,7 @@ def allocate_budget():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     campaign_id = data.get('campaign_id')
     amount = data.get('amount')
@@ -352,7 +356,7 @@ def reclaim_budget():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     campaign_id = data.get('campaign_id')
     amount = data.get('amount')
@@ -457,7 +461,7 @@ def distribute_to_creator():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     campaign_id = data.get('campaign_id')
     creator_id = data.get('creator_id')
@@ -580,7 +584,7 @@ def creator_withdraw():
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     data = request.json
     print(f"[/api/payments/creator-withdraw] Received withdrawal request data: {data}")
     amount = data.get('amount')
@@ -752,7 +756,7 @@ def save_payout_details():
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     data = request.json
     payout_method = data.get('payout_method')
     
@@ -830,7 +834,7 @@ def get_payout_details():
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     
     try:
         creator_response = supabase.table('creator').select('id, payout_method, upi_id, bank_account, ifsc, account_holder_name').eq('id', creator_id).limit(1).execute()
@@ -880,7 +884,7 @@ def verify_payout_details():
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     
     try:
         creator_response = supabase.table('creator').select('id, payout_method, upi_id, bank_account, ifsc').eq('id', creator_id).limit(1).execute()
@@ -942,7 +946,7 @@ def get_withdrawal_history():
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     status_filter = request.args.get('status')  # pending, success, failed
     limit = request.args.get('limit', 20, type=int)
     offset = request.args.get('offset', 0, type=int)
@@ -999,7 +1003,7 @@ def get_creator_notifications(creator_id):
     claims = get_jwt()
     print(f"DEBUG: JWT Claims: {claims}")
     user_role = claims.get('role')
-    if user_role != 'creator' or str(get_jwt_identity()) != str(creator_id):
+    if user_role != 'creator' or str(get_current_user_id()) != str(creator_id):
         return jsonify({'msg': 'Unauthorized'}), 403
     
     try:
@@ -1032,7 +1036,7 @@ def get_transactions(user_type, user_id):
     
     # 👇 FIX 1: Extract role from 'user_metadata' (not top-level claims)
     user_role = claims.get('role')
-    current_user_id = get_jwt_identity()
+    current_user_id = get_current_user_id()
     
     # Debugging (Optional: helps you see what's happening)
     print(f"DEBUG: Token ID: {current_user_id} | URL ID: {user_id}")
@@ -1047,7 +1051,7 @@ def get_transactions(user_type, user_id):
     select_fields = None
 
     if user_type == 'brand':
-        target_table = 'brand_transaction_detailed_view' # Or your view name
+        target_table = 'brand_transaction_view' # Or your view name
         id_column = 'brand_id'
         select_fields = '*'
     elif user_type == 'creator':
@@ -1128,7 +1132,7 @@ def refund_campaign():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     campaign_id = data.get('campaign_id')
 
@@ -1214,7 +1218,7 @@ def get_campaign_summary(campaign_id):
     """
     claims = get_jwt()
     user_role = claims.get('role')
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
 
     try:
         # Get campaign details
@@ -1282,7 +1286,7 @@ def calculate_earnings(campaign_id, creator_id):
     """
     claims = get_jwt()
     user_role = claims.get('role')
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
     
     # Allow brand to check their creator earnings or creator to check own
     is_authorized = (user_role == 'brand') or (user_role == 'creator' and user_id == creator_id)
@@ -1386,7 +1390,7 @@ def bulk_distribute():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     distributions = data.get('distributions', [])
 
@@ -1550,7 +1554,7 @@ def request_refund():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     data = request.json
     campaign_id = data.get('campaign_id')
     requested_amount = data.get('requested_amount')
@@ -1638,7 +1642,7 @@ def get_refund_requests():
     if user_role != 'brand':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    brand_id = get_jwt_identity()
+    brand_id = get_current_user_id()
     status_filter = request.args.get('status')  # pending, approved, rejected, completed
     campaign_id_filter = request.args.get('campaign_id')
     limit = request.args.get('limit', 20, type=int)
@@ -1711,7 +1715,7 @@ def approve_refund():
     if user_role != 'admin':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    admin_id = get_jwt_identity()
+    admin_id = get_current_user_id()
     data = request.json
     refund_id = data.get('refund_id')
     approved_amount = data.get('approved_amount')
@@ -1823,7 +1827,7 @@ def reject_refund():
     if user_role != 'admin':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    admin_id = get_jwt_identity()
+    admin_id = get_current_user_id()
     data = request.json
     refund_id = data.get('refund_id')
     rejection_reason = data.get('rejection_reason', 'Refund rejected by admin')
@@ -1877,7 +1881,7 @@ def get_refund_status(refund_id):
     """
     claims = get_jwt()
     user_role = claims.get('role')
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
     
     try:
         # Get refund audit
@@ -2026,7 +2030,7 @@ def revert_failed_withdrawal():
     if user_role != 'creator':
         return jsonify({'msg': 'Unauthorized'}), 403
     
-    creator_id = get_jwt_identity()
+    creator_id = get_current_user_id()
     data = request.json
     transaction_id = data.get('transaction_id')
 
