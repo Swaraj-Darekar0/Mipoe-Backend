@@ -1,34 +1,34 @@
-from app import app                        # re-uses the configured Flask app
-from models import Admin # Only import Admin model
-from config import Config
-from supabase import create_client, Client
+import asyncio
 
-# Initialize Supabase client
-supabase: Client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+from sqlalchemy import select
 
-# Remove app context as db.session is no longer used
-# with app.app_context(): # open application context
+from backend.core.security import hash_password
+from backend.db.models import Admin
+from backend.db.session import AsyncSessionLocal
 
-admin_username = "MainAdmin"
-admin_email = "admin@gmail.com"
-admin_password = "swaraj"
 
-# Prepare data for Supabase insertion
-new_admin = {
-    "username": admin_username,
-    "email": admin_email,
-    "password_hash": admin_password
-}
+ADMIN_USERNAME = "MainAdmin"
+ADMIN_EMAIL = "admin@gmail.com"
+ADMIN_PASSWORD = "swaraj"
 
-try:
-    # Insert into the 'admin' table
-    response = supabase.table('admin').insert([new_admin]).execute()
 
-    if response.data:
-        print("Admin user created successfully:", response.data[0]['username'])
-    else:
-        print("Failed to create admin user:", response.count)
-        print("Error details:", response.data)
+async def create_admin():
+    async with AsyncSessionLocal() as db:
+        existing = await db.execute(select(Admin).where(Admin.email == ADMIN_EMAIL))
+        if existing.scalar_one_or_none():
+            print("Admin user already exists:", ADMIN_EMAIL)
+            return
 
-except Exception as e:
-    print(f"Error creating admin user: {e}")
+        admin = Admin(
+            username=ADMIN_USERNAME,
+            email=ADMIN_EMAIL,
+            password_hash=hash_password(ADMIN_PASSWORD),
+        )
+        db.add(admin)
+        await db.commit()
+        await db.refresh(admin)
+        print("Admin user created successfully:", admin.username)
+
+
+if __name__ == "__main__":
+    asyncio.run(create_admin())
