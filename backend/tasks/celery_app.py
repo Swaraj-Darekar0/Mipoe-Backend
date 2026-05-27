@@ -14,6 +14,7 @@ celery_app = Celery(
         # "backend.tasks.metrics",
         "backend.tasks.payouts",
         "backend.tasks.emails",
+        "backend.tasks.onboarding",
     ],
 )
 

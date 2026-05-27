@@ -64,21 +64,31 @@ async def admin_update_clip(
     creator = await db.get(Creator, clip.creator_id)
 
     if payload.status == "accepted":
+        clip_views = int(getattr(clip, "view_count", 0) or 0)
         accepted = AcceptedClip(
             creator_id=clip.creator_id,
             campaign_id=clip.campaign_id,
             clip_url=clip.clip_url,
             submitted_at=clip.submitted_at,
             media_id=None,
-            view_count=None,
+            view_count=clip_views,
+            like_count=int(getattr(clip, "like_count", 0) or 0),
+            comment_count=int(getattr(clip, "comment_count", 0) or 0),
             caption=None,
             instagram_posted_at=None,
             last_view_count=0,
             amount_paid=0.0,
+            clip_thumbnail=getattr(clip, "clip_thumbnail", None),
         )
         db.add(accepted)
         await db.flush()
         await db.delete(clip)
+
+        if clip_views > 0:
+            campaign = await db.get(Campaign, clip.campaign_id)
+            if campaign:
+                campaign.total_view_count = (campaign.total_view_count or 0) + clip_views
+
         if creator:
             await append_creator_notification(
                 db,
@@ -91,19 +101,27 @@ async def admin_update_clip(
         await db.commit()
         return {"msg": "Clip updated successfully"}
 
-    clip.is_deleted_by_admin = True
-    clip.feedback = payload.feedback
+    clip_thumbnail = getattr(clip, "clip_thumbnail", None)
+    clip_id = clip.id
+    creator_id = clip.creator_id
+    campaign_id = clip.campaign_id
+    feedback = payload.feedback
+
     if creator:
         await append_creator_notification(
             db,
             creator.id,
-            message=f"Your clip was rejected for campaign {clip.campaign_id}.",
+            message=f"Your clip was rejected for campaign {campaign_id}.",
             notification_type="clip_rejected",
-            campaign_id=clip.campaign_id,
-            clip_id=clip.id,
+            campaign_id=campaign_id,
+            clip_id=clip_id,
+            clip_thumbnail=clip_thumbnail,
+            feedback=feedback,
         )
+    await db.delete(clip)
     await db.commit()
     return {"msg": "Clip updated successfully"}
+
 
 
 @router.delete("/api/admin/clip/{clip_id}")
@@ -253,3 +271,84 @@ async def get_campaign_performance_analytics(
         },
         "creator_performance": sorted_creators,
     }
+
+
+from pydantic import BaseModel
+from typing import Literal
+
+class VerifyBrandActionRequest(BaseModel):
+    action: Literal["approve", "reject"]
+    reason: str | None = None
+
+
+@router.get("/api/admin/brands/onboarding")
+async def get_admin_brands_onboarding(
+    current_user: CurrentUser = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    from backend.db.models import Brand
+    from backend.core.security import decrypt_data
+
+    result = await db.execute(
+        select(Brand).where(
+            Brand.onboarding_status.in_(["pending_verification", "verified", "rejected"])
+        )
+    )
+    brands = result.scalars().all()
+    
+    serialized_brands = []
+    for brand in brands:
+        masked_pan = "N/A"
+        if brand.pan_number:
+            raw_pan = decrypt_data(brand.pan_number)
+            if len(raw_pan) == 10:
+                masked_pan = f"{raw_pan[:2]}******{raw_pan[-2:]}"
+            else:
+                masked_pan = "INVALID_DECRYPT"
+                
+        serialized_brands.append({
+            "id": brand.id,
+            "username": brand.username,
+            "email": brand.email,
+            "phone": brand.phone,
+            "onboarding_status": brand.onboarding_status,
+            "pan_verification_status": brand.pan_verification_status,
+            "pan_holder_name": brand.pan_holder_name,
+            "business_address": brand.business_address,
+            "logo_url": brand.logo_url,
+            "banner_url": brand.banner_url,
+            "description": brand.description,
+            "instagram_url": brand.instagram_url,
+            "youtube_url": brand.youtube_url,
+            "website_url": brand.website_url,
+            "category": brand.category,
+            "masked_pan": masked_pan,
+            "rejection_reason": brand.rejection_reason
+        })
+    return serialized_brands
+
+
+@router.post("/api/admin/brands/{brand_id}/verify")
+async def verify_brand_compliance(
+    brand_id: int,
+    payload: VerifyBrandActionRequest,
+    current_user: CurrentUser = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    from backend.db.models import Brand
+    
+    brand = await db.get(Brand, brand_id)
+    if not brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    if payload.action == "approve":
+        brand.onboarding_status = "verified"
+        brand.rejection_reason = None
+    else:
+        if not payload.reason:
+            raise HTTPException(status_code=400, detail="Rejection reason is required.")
+        brand.onboarding_status = "rejected"
+        brand.rejection_reason = payload.reason
+        
+    await db.commit()
+    return {"msg": f"Brand compliance status updated to {brand.onboarding_status}", "onboarding_status": brand.onboarding_status}

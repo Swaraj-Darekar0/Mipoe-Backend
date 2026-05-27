@@ -56,7 +56,7 @@ Mipoe-Backend/
     │   ├── router.py           # Combined API router registry
     │   └── routers/            # Feature-specific API endpoint handlers
     │       ├── admin.py        # Moderation, clip auditing, platform wallet management
-    │       ├── auth.py         # Login, registration, token refresh, Google OAuth sync
+    │       ├── auth.py         # Login, registration, cookie session, Google OAuth sync
     │       ├── brands.py       # Brand campaign creation, budget allocation, profile updates
     │       ├── campaigns.py    # Public campaign exploration, analytics and rankings
     │       ├── creators.py     # Profile settings, clip submissions, Instagram linking
@@ -74,6 +74,7 @@ Mipoe-Backend/
     │   └── common.py           # Profile, campaign, payment, and submission schemas
     ├── services/               # Reusable business logic and external service clients
     │   ├── campaigns.py        # Campaign fetching, clip serialization, and rankings logic
+    │   ├── cashfree_verify.py  # Cashfree sync PAN validation API service
     │   ├── email.py            # Transactional email composition services (Resend)
     │   ├── notifications.py    # Notification appending using JSONB arrays
     │   └── supabase_auth.py    # Supabase token validation and profile retrieval
@@ -82,6 +83,7 @@ Mipoe-Backend/
         ├── emails.py           # Transactional email queue workers
         ├── maintenance.py      # Scheduled campaign deactivation and clip deletion
         ├── metrics.py          # Scraper-based Reel metrics update task
+        ├── onboarding.py       # Async PAN verification background task runner
         └── payouts.py          # Automatic hourly milestone payouts distribution
 ```
 

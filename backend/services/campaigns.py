@@ -29,7 +29,8 @@ def serialize_campaign(campaign: Campaign) -> dict:
     }
 
 
-def serialize_submitted_clip(clip: SubmittedClip, status: str = "pending") -> dict:
+def serialize_submitted_clip(clip: SubmittedClip) -> dict:
+    status = "rejected" if clip.is_deleted_by_admin else "pending"
     return {
         "id": clip.id,
         "campaign_id": clip.campaign_id,
@@ -39,8 +40,12 @@ def serialize_submitted_clip(clip: SubmittedClip, status: str = "pending") -> di
         "status": status,
         "is_deleted_by_admin": bool(clip.is_deleted_by_admin),
         "feedback": clip.feedback,
-        "view_count": None,
+        "view_count": int(getattr(clip, "view_count", 0) or 0),
+        "like_count": int(getattr(clip, "like_count", 0) or 0),
+        "comment_count": int(getattr(clip, "comment_count", 0) or 0),
+        "clip_thumbnail": getattr(clip, "clip_thumbnail", None),
     }
+
 
 
 def serialize_accepted_clip(clip: AcceptedClip, creator_name: str | None = None) -> dict:
@@ -51,10 +56,13 @@ def serialize_accepted_clip(clip: AcceptedClip, creator_name: str | None = None)
         "clip_url": clip.clip_url,
         "submitted_at": clip.submitted_at.isoformat() if clip.submitted_at else None,
         "media_id": clip.media_id,
-        "view_count": clip.view_count,
+        "view_count": int(clip.view_count or 0),
+        "like_count": int(getattr(clip, "like_count", 0) or 0),
+        "comment_count": int(getattr(clip, "comment_count", 0) or 0),
         "caption": clip.caption,
         "instagram_posted_at": clip.instagram_posted_at.isoformat() if clip.instagram_posted_at else None,
         "status": "accepted",
+        "clip_thumbnail": getattr(clip, "clip_thumbnail", None),
     }
     if creator_name is not None:
         payload["creator_name"] = creator_name

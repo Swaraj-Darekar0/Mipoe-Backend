@@ -3,10 +3,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import CurrentUser, require_role
-from backend.db.models import AcceptedClip, Brand, BrandTransaction, BrandTransactionType, Campaign, TransactionStatus
+from backend.db.models import AcceptedClip, Brand, BrandTransaction, BrandTransactionType, Campaign, Creator, SubmittedClip, TransactionStatus
 from backend.db.session import get_db
-from backend.schemas.common import CreateCampaignRequest, UpdateBrandProfileRequest
+from backend.schemas.common import CreateCampaignRequest, UpdateBrandProfileRequest, UpdateClipStatusRequest
 from backend.services.campaigns import serialize_campaign
+from backend.services.notifications import append_creator_notification
 
 
 router = APIRouter()
@@ -257,7 +258,25 @@ async def get_brand_profile(
     brand = await db.get(Brand, current_user.id)
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
-    return {"id": brand.id, "username": brand.username, "email": brand.email, "phone": brand.phone}
+    return {
+        "id": brand.id,
+        "username": brand.username,
+        "email": brand.email,
+        "phone": brand.phone,
+        "onboarding_status": brand.onboarding_status or "not_started",
+        "pan_verification_status": brand.pan_verification_status,
+        "pan_holder_name": brand.pan_holder_name,
+        "business_address": brand.business_address,
+        "logo_url": brand.logo_url,
+        "banner_url": brand.banner_url,
+        "description": brand.description,
+        "instagram_url": brand.instagram_url,
+        "youtube_url": brand.youtube_url,
+        "website_url": brand.website_url,
+        "category": brand.category,
+        "consent_given": bool(brand.consent_given),
+        "rejection_reason": brand.rejection_reason,
+    }
 
 
 @router.put("/api/brand/profile")
@@ -283,3 +302,203 @@ async def update_brand_profile(
 
     await db.commit()
     return {"msg": "Brand profile updated successfully"}
+
+
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class VerifyPanRequest(BaseModel):
+    pan_number: str = Field(min_length=10, max_length=10)
+    pan_holder_name: str = Field(min_length=1)
+    business_address: str = Field(min_length=1)
+    consent_given: bool
+
+class SubmitBrandProfileRequest(BaseModel):
+    logo_url: str | None = None
+    banner_url: str | None = None
+    description: str | None = None
+    instagram_url: str | None = None
+    youtube_url: str | None = None
+    website_url: str | None = None
+    category: Literal["Gaming", "Fashion", "Electronics", "Beauty & Skin care", "Fitness", "Software Platforms"]
+
+
+@router.post("/api/brand/onboarding/verify-pan")
+async def verify_brand_pan(
+    payload: VerifyPanRequest,
+    current_user: CurrentUser = Depends(require_role("brand")),
+    db: AsyncSession = Depends(get_db),
+):
+    if not payload.consent_given:
+        raise HTTPException(status_code=400, detail="Consent is required for PII validation.")
+
+    brand = await db.get(Brand, current_user.id)
+    if not brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    # Update state to verifying_pan
+    brand.onboarding_status = "verifying_pan"
+    brand.consent_given = True
+    await db.commit()
+
+    # Queue Celery task
+    from backend.tasks.onboarding import verify_brand_pan_task
+    verify_brand_pan_task.delay(
+        brand_id=brand.id,
+        pan_number=payload.pan_number,
+        holder_name=payload.pan_holder_name,
+        business_address=payload.business_address
+    )
+
+    return {"msg": "PAN verification has been queued", "status": "verifying_pan"}
+
+
+@router.post("/api/brand/onboarding/profile")
+async def submit_brand_profile(
+    payload: SubmitBrandProfileRequest,
+    current_user: CurrentUser = Depends(require_role("brand")),
+    db: AsyncSession = Depends(get_db),
+):
+    brand = await db.get(Brand, current_user.id)
+    if not brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    if brand.pan_verification_status != "SUCCESS":
+        raise HTTPException(status_code=400, detail="PAN verification must be completed first.")
+
+    brand.logo_url = payload.logo_url
+    brand.banner_url = payload.banner_url
+    brand.description = payload.description
+    brand.instagram_url = payload.instagram_url
+    brand.youtube_url = payload.youtube_url
+    brand.website_url = payload.website_url
+    brand.category = payload.category
+    
+    # Ready for Admin review
+    brand.onboarding_status = "pending_verification"
+    brand.rejection_reason = None
+    
+    await db.commit()
+    return {"msg": "Brand profile submitted successfully", "status": "pending_verification"}
+
+
+@router.get("/api/brand/campaigns/{campaign_id}/clips")
+async def get_brand_campaign_clips(
+    campaign_id: int,
+    current_user: CurrentUser = Depends(require_role("brand")),
+    db: AsyncSession = Depends(get_db),
+):
+    from backend.db.models import SubmittedClip, AcceptedClip, Creator
+    from backend.services.campaigns import serialize_accepted_clip, serialize_submitted_clip
+
+    campaign = await get_brand_campaign_or_404(db, current_user.id, campaign_id)
+    
+    # Fetch accepted clips
+    accepted_result = await db.execute(select(AcceptedClip).where(AcceptedClip.campaign_id == campaign_id))
+    accepted_clips = list(accepted_result.scalars().all())
+    
+    # Fetch submitted clips
+    submitted_result = await db.execute(select(SubmittedClip).where(SubmittedClip.campaign_id == campaign_id))
+    submitted_clips = list(submitted_result.scalars().all())
+    
+    # Get creator names
+    creator_ids = list({clip.creator_id for clip in accepted_clips} | {clip.creator_id for clip in submitted_clips})
+    creator_names = {}
+    if creator_ids:
+        creator_result = await db.execute(select(Creator.id, Creator.username).where(Creator.id.in_(creator_ids)))
+        creator_names = {row.id: row.username for row in creator_result.all()}
+        
+    serialized_accepted = [
+        serialize_accepted_clip(clip, creator_names.get(clip.creator_id, "Unknown Creator"))
+        for clip in accepted_clips
+    ]
+    
+    serialized_submitted = []
+    for clip in submitted_clips:
+        payload = serialize_submitted_clip(clip)
+        payload["creator_name"] = creator_names.get(clip.creator_id, "Unknown Creator")
+        serialized_submitted.append(payload)
+        
+    return {
+        "campaign_id": campaign_id,
+        "accepted_clips": serialized_accepted,
+        "submitted_clips": serialized_submitted,
+        "all_clips": serialized_accepted + serialized_submitted
+    }
+
+
+@router.put("/api/brand/campaigns/{campaign_id}/clips/{clip_id}/status")
+async def brand_update_clip_status(
+    campaign_id: int,
+    clip_id: int,
+    payload: UpdateClipStatusRequest,
+    current_user: CurrentUser = Depends(require_role("brand")),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_brand_campaign_or_404(db, current_user.id, campaign_id)
+
+    clip = await db.get(SubmittedClip, clip_id)
+    if not clip or clip.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    creator = await db.get(Creator, clip.creator_id)
+
+    if payload.status == "accepted":
+        clip_views = int(getattr(clip, "view_count", 0) or 0)
+        accepted = AcceptedClip(
+            creator_id=clip.creator_id,
+            campaign_id=clip.campaign_id,
+            clip_url=clip.clip_url,
+            submitted_at=clip.submitted_at,
+            media_id=None,
+            view_count=clip_views,
+            like_count=int(getattr(clip, "like_count", 0) or 0),
+            comment_count=int(getattr(clip, "comment_count", 0) or 0),
+            caption=None,
+            instagram_posted_at=None,
+            last_view_count=0,
+            amount_paid=0.0,
+            clip_thumbnail=getattr(clip, "clip_thumbnail", None),
+        )
+        db.add(accepted)
+        await db.flush()
+        await db.delete(clip)
+        
+        if clip_views > 0:
+            campaign = await db.get(Campaign, campaign_id)
+            if campaign:
+                campaign.total_view_count = (campaign.total_view_count or 0) + clip_views
+
+        if creator:
+            await append_creator_notification(
+                db,
+                creator.id,
+                message=f"Your clip was approved for campaign {accepted.campaign_id}.",
+                notification_type="clip_approved",
+                campaign_id=accepted.campaign_id,
+                clip_id=accepted.id,
+            )
+        await db.commit()
+        return {"msg": "Clip approved successfully"}
+
+    clip_thumbnail = getattr(clip, "clip_thumbnail", None)
+    clip_id = clip.id
+    creator_id = clip.creator_id
+    campaign_id = clip.campaign_id
+    feedback = payload.feedback
+
+    if creator:
+        await append_creator_notification(
+            db,
+            creator.id,
+            message=f"Your clip was rejected for campaign {campaign_id}.",
+            notification_type="clip_rejected",
+            campaign_id=campaign_id,
+            clip_id=clip_id,
+            clip_thumbnail=clip_thumbnail,
+            feedback=feedback,
+        )
+    await db.delete(clip)
+    await db.commit()
+    return {"msg": "Clip rejected successfully"}
+

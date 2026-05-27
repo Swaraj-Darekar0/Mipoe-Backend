@@ -16,3 +16,5 @@ supabase>=2.15
 gotrue>=2.12
 cryptography>=45.0
 requests>=2.32
+Pillow>=10.4
+yt-dlp>=2025.1.15

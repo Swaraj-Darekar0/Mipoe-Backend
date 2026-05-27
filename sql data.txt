@@ -54,6 +54,7 @@ create table public.creator (
   notifications jsonb[] null default '{}'::jsonb[],
   instagram_username character varying null,
   instagram_verified boolean null default false,
+  consent_given boolean null default false,
   constraint creator_pkey primary key (id),
   constraint creator_email_key unique (email),
   constraint creator_username_key unique (username)
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS public.brand (
   virtual_acc_ifsc text null,
   virtual_vpa_id text null,
   phone character varying(20) null,
+  consent_given boolean null default false,
   constraint brand_pkey primary key (id),
   constraint brand_email_key unique (email),
   constraint brand_username_key unique (username)

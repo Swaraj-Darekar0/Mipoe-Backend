@@ -1,13 +1,12 @@
 from datetime import date
 from secrets import token_urlsafe
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_refresh_payload
 from backend.core.config import get_settings
-from backend.core.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
+from backend.core.security import create_access_token, decode_token, hash_password, verify_password
 from backend.db.models import Admin, Brand, Creator
 from backend.db.session import get_db, redis_client
 from backend.schemas.auth import LoginRequest, PasswordResetRequest, RegisterRequest, ResetPasswordRequest
@@ -26,12 +25,19 @@ ROLE_MODEL_MAP = {
 }
 
 
-def build_auth_response(user, role: str):
+def build_auth_response(user, role: str, response: Response):
     access_token = create_access_token(str(user.id), role, user.username)
-    refresh_token = create_refresh_token(str(user.id), role, user.username)
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
+        domain=settings.cookie_domain,
+        max_age=settings.access_token_expire_minutes * 60,
+        path="/"
+    )
     payload = {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
         "role": role,
         "username": user.username,
         "user_id": str(user.id),
@@ -48,7 +54,7 @@ async def get_user_by_email(db: AsyncSession, role: str, email: str):
 
 
 @router.post("/register")
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(payload: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)):
     existing = await get_user_by_email(db, payload.role, payload.email)
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
@@ -64,12 +70,14 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             password_hash=hash_password(payload.password),
             join_date=date.today(),
             profile_completed=False,
+            consent_given=payload.consent_given,
         )
     elif payload.role == "brand":
         user = Brand(
             username=payload.username,
             email=payload.email,
             password_hash=hash_password(payload.password),
+            consent_given=payload.consent_given,
         )
     else:
         user = Admin(
@@ -81,13 +89,13 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    response = build_auth_response(user, payload.role)
-    response["msg"] = "User registered successfully"
-    return response
+    response_data = build_auth_response(user, payload.role, response)
+    response_data["msg"] = "User registered successfully"
+    return response_data
 
 
 @router.post("/login")
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(payload: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     if payload.role:
         roles_to_try = [payload.role]
     else:
@@ -108,7 +116,12 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
-    return build_auth_response(user, resolved_role)
+    # Save consent given on login
+    user.consent_given = payload.consent_given
+    await db.commit()
+    await db.refresh(user)
+
+    return build_auth_response(user, resolved_role, response)
 
 
 @router.post("/request-password-reset")
@@ -150,29 +163,30 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
 
 
 @router.delete("/logout")
-async def logout(authorization: str = Header(default="")):
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization header")
-    token = authorization.split(" ", 1)[1].strip()
-    payload = decode_token(token)
-    exp = payload.get("exp")
-    jti = payload.get("jti")
-    if jti and exp:
-        from time import time
-
-        ttl = max(int(exp - time()), 1)
-        await redis_client.setex(f"blocklist:{jti}", ttl, "1")
-    return {"msg": f"{payload.get('type', 'Token').capitalize()} token successfully revoked"}
-
-
-@router.post("/refresh")
-async def refresh(payload: dict = Depends(get_refresh_payload)):
-    access_token = create_access_token(payload["sub"], payload["role"], payload.get("username", ""))
-    return {"access_token": access_token}
+async def logout(request: Request, response: Response):
+    token = request.cookies.get("access_token")
+    if token:
+        try:
+            payload = decode_token(token)
+            exp = payload.get("exp")
+            jti = payload.get("jti")
+            if jti and exp:
+                from time import time
+                ttl = max(int(exp - time()), 1)
+                await redis_client.setex(f"blocklist:{jti}", ttl, "1")
+        except Exception:
+            pass
+    
+    response.delete_cookie(
+        key="access_token",
+        domain=settings.cookie_domain,
+        path="/"
+    )
+    return {"msg": "Successfully logged out"}
 
 
 @router.post("/api/auth/google-sync")
-async def google_sync(authorization: str = Header(default=""), db: AsyncSession = Depends(get_db)):
+async def google_sync(response: Response, authorization: str = Header(default=""), db: AsyncSession = Depends(get_db)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization header")
 
@@ -206,6 +220,6 @@ async def google_sync(authorization: str = Header(default=""), db: AsyncSession 
         await db.commit()
         await db.refresh(user)
 
-    response = build_auth_response(user, role)
-    response["msg"] = "User profile created successfully"
-    return response
+    response_data = build_auth_response(user, role, response)
+    response_data["msg"] = "User profile created successfully"
+    return response_data

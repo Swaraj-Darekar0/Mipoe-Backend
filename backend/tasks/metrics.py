@@ -50,12 +50,16 @@ def fetch_and_update_metrics():
             try:
                 media = client.media_info(media_pk)
                 view_count = media.play_count or 0
+                like_count = media.like_count or 0
+                comment_count = media.comment_count or 0
                 caption = media.caption_text or ""
                 posted_at = media.taken_at.isoformat() if media.taken_at else None
             except ValidationError:
                 raw = client.private_request(f"media/{media_pk}/info/")
                 item = raw["items"][0]
                 view_count = item.get("play_count") or item.get("view_count", 0)
+                like_count = item.get("like_count", 0) or 0
+                comment_count = item.get("comment_count", 0) or 0
                 caption = (item.get("caption") or {}).get("text", "")
                 timestamp = item.get("taken_at")
                 posted_at = datetime.fromtimestamp(timestamp).isoformat() if timestamp else None
@@ -66,6 +70,8 @@ def fetch_and_update_metrics():
                     if not db_clip:
                         return
                     db_clip.view_count = view_count
+                    db_clip.like_count = like_count
+                    db_clip.comment_count = comment_count
                     db_clip.media_id = media_code
                     db_clip.caption = caption
                     if posted_at:

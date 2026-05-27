@@ -14,8 +14,12 @@ class Settings(BaseSettings):
     database_url: str = Field(alias="DATABASE_URL")
     jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
-    access_token_expire_minutes: int = 60
+    access_token_expire_minutes: int = 43200
     refresh_token_expire_days: int = 30
+    production: bool = Field(default=False, alias="PRODUCTION")
+    cookie_secure: bool = Field(default=False, alias="COOKIE_SECURE")
+    cookie_samesite: str = Field(default="lax", alias="COOKIE_SAMESITE")
+    cookie_domain: str | None = Field(default=None, alias="COOKIE_DOMAIN")
 
     redis_url: str = Field(default="redis://localhost:6379/2", alias="REDIS_URL")
     celery_broker_url: str = Field(default="redis://localhost:6379/0")
@@ -32,6 +36,9 @@ class Settings(BaseSettings):
     cashfree_app_id: str | None = Field(default=None, alias="CASHFREE_APP_ID")
     cashfree_secret_key: str | None = Field(default=None, alias="CASHFREE_SECRET_KEY")
     cashfree_api_url: str = Field(default="https://sandbox.cashfree.com/pg", alias="CASHFREE_API_URL")
+
+    verification_cashfree_client_id: str | None = Field(default=None, alias="VERIFICATION_CASHFREE_CLIENT_ID")
+    verification_cashfree_secret_key: str | None = Field(default=None, alias="VERIFICATION_CASHFREE_SECRET_KEY")
 
     instagram_username: str | None = Field(default=None, alias="INSTAGRAM_USERNAME")
     instagram_password: str | None = Field(default=None, alias="INSTAGRAM_PASSWORD")

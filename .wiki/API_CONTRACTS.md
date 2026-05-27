@@ -6,10 +6,11 @@ This document serves as the comprehensive endpoint schema mapping and API contra
 
 ## 🔐 Global Request Headers
 
-Authenticated endpoints require the standard JWT authorization header:
+Authenticated endpoints require the HttpOnly session cookie set in the request:
 ```http
-Authorization: Bearer <access_token>
+Cookie: access_token=<access_token>
 ```
+- Alternatively, endpoints can accept `Authorization: Bearer <access_token>` headers for API testing.
 - The signature is validated against `JWT_SECRET_KEY` using the `HS256` algorithm.
 - Access token payload must contain the `type: "access"` claim.
 - Token revocation is enforced by checking if the token's `jti` is blocklisted in Redis DB 2 (`blocklist:<jti>`).
@@ -20,17 +21,16 @@ Authorization: Bearer <access_token>
 
 ### 1. Authentication Router (`/`)
 - **File**: [backend/api/routers/auth.py](file:///d:/Mipoe/Mipoe-Backend/backend/api/routers/auth.py)
-- **Dependencies**: No auth header required for registration/login.
+- **Dependencies**: No auth cookies or headers required for registration/login.
 
 | Method | Endpoint | Request Schema | Response / Actions |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/register` | `RegisterRequest` | Hash password, create DB record, return access/refresh token. |
-| `POST` | `/login` | `LoginRequest` | Verify password hash, return access/refresh token. |
+| `POST` | `/register` | `RegisterRequest` | Hash password, create DB record, set `access_token` HttpOnly cookie, return metadata. |
+| `POST` | `/login` | `LoginRequest` | Verify password hash, set `access_token` HttpOnly cookie, return metadata. |
 | `POST` | `/request-password-reset` | `PasswordResetRequest` | Store temporary reset token in Redis, dispatch Celery reset email. |
 | `POST` | `/reset-password` | `ResetPasswordRequest` | Verify Redis token, update user password, delete token from Redis. |
-| `POST` | `/refresh` | *Header: Bearer refresh* | Verify refresh token, return new access token. |
-| `DELETE`| `/logout` | *Header: Bearer access* | Extracts `jti` claim and stores in Redis blocklist until expiration. |
-| `POST` | `/api/auth/google-sync` | *Header: Bearer Supabase* | Validates token with Supabase; creates or syncs local brand/creator DB profile. |
+| `DELETE`| `/logout` | *Cookie: access_token* | Deletes the `access_token` cookie and blocklists the active JWT `jti` in Redis. |
+| `POST` | `/api/auth/google-sync` | *Header: Bearer Supabase* | Validates token with Supabase, sets local `access_token` HttpOnly cookie, and returns user metadata. |
 
 ---
 
@@ -77,8 +77,12 @@ Authorization: Bearer <access_token>
 | `PUT` | `/api/brand/campaigns/{id}/view_threshold`| `{"view_threshold": int}` | Modifies view threshold settings per payout milestone. |
 | `PUT` | `/api/brand/campaigns/{id}/deadline` | `{"deadline": "YYYY-MM-DD"}`| Updates end date constraints. |
 | `GET` | `/api/brand/campaigns/{id}/pending-payouts`| `campaign_id` (Path) | Lists unpaid milestone values for creators associated with the campaign. |
+| `GET` | `/api/brand/campaigns/{campaign_id}/clips`| `campaign_id` (Path) | Retrieves all accepted and submitted/pending clips with creator names plus zero-initialized metric fields (`view_count`, `like_count`, `comment_count`) for the campaign. |
+| `PUT` | `/api/brand/campaigns/{campaign_id}/clips/{clip_id}/status` | `UpdateClipStatusRequest` | Brand-owned moderation action. Approves a submitted clip into `accepted_clips` or rejects it with feedback for creator notification. |
 | `GET` | `/api/brand/profile` | None | Retrieves brand company metadata. |
 | `PUT` | `/api/brand/profile` | `UpdateBrandProfileRequest`| Updates username and contact phone. |
+| `POST`| `/api/brand/onboarding/verify-pan` | `VerifyPanRequest` | Queues Cashfree PAN sync verification background task. |
+| `POST`| `/api/brand/onboarding/profile` | `SubmitBrandProfileRequest` | Submits logo/socials, transitions status to `pending_verification` for admin review. |
 
 ---
 
@@ -100,6 +104,7 @@ Authorization: Bearer <access_token>
 | `GET` | `/creator/payout-details` | Creator| None | Retrieves settlement configurations. |
 | `GET` | `/creator/withdrawals` | Creator| `status`, `limit`, `offset` | Lists withdrawal transaction history logs. |
 | `GET` | `/creator/notifications/{id}` | Creator| `creator_id` (Path) | Retrieves user payout notification messages. |
+| `DELETE`| `/creator/notifications/{notification_id}` | Creator| `notification_id` (Path) | Deletes/dismisses a specific creator notification by ID. |
 | `GET` | `/transactions/{type}/{id}`| Both | `user_type`, `user_id` | Returns financial audit ledger lines. |
 | `POST` | `/creator/revert-withdrawal`| Creator| `{"transaction_id": int}` | Reverts failed withdrawal; restores creator wallet balance. |
 | `POST` | `/refund-campaign` | Brand | `{"campaign_id": int}` | Returns all unused campaign allocations to the brand wallet. |
@@ -127,6 +132,8 @@ Authorization: Bearer <access_token>
 | `PUT` | `/api/admin/clip/{clip_id}/view-count`| `UpdateViewCountRequest` | Manually updates clip view count; updates campaign totals. |
 | `PUT` | `/api/admin/campaign/{id}/update-views`| `{"total_view_count": int}` | Manually overrides total campaign view count. |
 | `GET` | `/api/admin/analytics/campaign-performance/{id}`| `campaign_id` (Path) | Returns detailed performance and utilization statistics. |
+| `GET` | `/api/admin/brands/onboarding` | None | Lists all onboarding applications (pending, verified, rejected) with decrypted/masked PAN. |
+| `POST`| `/api/admin/brands/{brand_id}/verify`| `brand_id` (Path), `VerifyBrandActionRequest` | Accepts or rejects the brand's onboarding application. |
 
 ---
 
@@ -147,3 +154,6 @@ Defined in `schemas/auth.py` and `schemas/common.py`. Key validators include:
 - **`CreateCampaignRequest`**: Validates platforms, budget limits, CPV rates, deadlines, and categories (`["fashion_clothing", "beauty_products", "youtube"]`).
 - **`SubmitClipRequest`**: Enforces a valid `HttpUrl` for submitted reel links.
 - **`UpdateViewCountRequest`**: Guarantees view counts are non-negative (`ge=0`).
+- **`VerifyPanRequest`**: Enforces `pan_number` (10 chars), non-empty `pan_holder_name` and `business_address`, and `consent_given` check.
+- **`SubmitBrandProfileRequest`**: Optional inputs for URLs (logo, banner, socials) and category string enum validation.
+- **`VerifyBrandActionRequest`**: Restricts action field to `"approve"` or `"reject"` string literals, with an optional string `reason`.

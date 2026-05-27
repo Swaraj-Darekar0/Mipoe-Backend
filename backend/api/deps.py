@@ -1,9 +1,11 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.security import decode_token
+from backend.core.config import get_settings
+from backend.core.security import create_access_token, decode_token
 from backend.db.session import get_db, redis_client
 
 
@@ -15,11 +17,18 @@ class CurrentUser:
     claims: dict
 
 
-async def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization header")
+async def get_current_user(
+    request: Request,
+    response: Response,
+    authorization: str = Header(default="")
+) -> CurrentUser:
+    token = request.cookies.get("access_token")
+    if not token:
+        if authorization.startswith("Bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+        else:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization header or cookie")
 
-    token = authorization.split(" ", 1)[1].strip()
     try:
         payload = decode_token(token)
     except Exception as exc:
@@ -36,6 +45,33 @@ async def get_current_user(authorization: str = Header(default="")) -> CurrentUs
         user_id = int(payload["sub"])
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid subject") from exc
+
+    # Sliding Session Check:
+    # If the token is more than halfway expired, reissue it
+    now = datetime.now(UTC).timestamp()
+    iat = payload.get("iat", 0)
+    exp = payload.get("exp", 0)
+    total_lifetime = exp - iat
+    elapsed = now - iat
+    
+    if total_lifetime > 0 and elapsed > (total_lifetime / 2):
+        settings = get_settings()
+        new_token = create_access_token(
+            subject=payload["sub"],
+            role=payload.get("role", ""),
+            username=payload.get("username", ""),
+            extra_claims=None
+        )
+        response.set_cookie(
+            key="access_token",
+            value=new_token,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite=settings.cookie_samesite,
+            domain=settings.cookie_domain,
+            max_age=settings.access_token_expire_minutes * 60,
+            path="/"
+        )
 
     return CurrentUser(id=user_id, role=payload.get("role", ""), username=payload.get("username", ""), claims=payload)
 

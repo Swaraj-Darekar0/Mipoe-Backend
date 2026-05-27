@@ -27,12 +27,14 @@ The application relies on several core infrastructure components and external Sa
 └──────────────┘    └──────────────┘   └──────────────┘
 ```
 
-1. **PostgreSQL**: Durable storage of campaigns, user accounts, transactions, notifications, and clip status.
+1. **PostgreSQL**: Durable storage of campaigns, user accounts, transactions, notifications, and clip status. Sensitive fields (like PAN cards) are symmetrically encrypted using Fernet cryptography prior to saving.
 2. **Redis**: In-memory high-throughput data store serving as Celery broker, result backend, and app state store.
-3. **Supabase**: Handles external user sign-in via Google OAuth, synced into our local DB via `/api/auth/google-sync`.
-4. **Cashfree**: Core payout and payment gateway used to process brand deposits, campaign budget allocations, and creator withdrawals.
+3. **Supabase**: Handles external user sign-in via Google OAuth, synced into our local DB via `/api/auth/google-sync`. Also hosts a public storage bucket (`thumnail_folder`) to store scraped clip thumbnails.
+4. **Cashfree**: Core payout and payment gateway used to process brand deposits, campaign budget allocations, and creator withdrawals. Additionally used for sync business PAN card validation.
 5. **Resend**: Transactional email API provider for password resets and system updates.
 6. **Instagram**: Source platform for clips; verified reel URLs are scraped to query view counts and clip metadata.
+7. **Pillow (PIL)**: Python Image Library used by background tasks to normalize thumbnails into compressed WebP assets before uploading to Supabase Storage.
+8. **yt-dlp**: Metadata extraction utility used by the thumbnail caching pipeline to resolve source thumbnail URLs without downloading the original media file.
 
 ---
 
@@ -119,6 +121,7 @@ DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/<dbname>
 # Security Config
 JWT_SECRET_KEY=your-long-random-string-used-for-signing-tokens
 JWT_ALGORITHM=HS256
+TOKEN_CRYPT_KEY=your-32-byte-hex-or-base64-key-for-pii-encryption
 
 # Redis Partition URLs
 REDIS_URL=redis://localhost:6379/2

@@ -67,3 +67,38 @@ def create_refresh_token(subject: str, role: str, username: str, extra_claims: d
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+
+
+def encrypt_data(data: str, key: str | None = None) -> str:
+    """Symmetrically encrypt text using a hashed version of the system crypt key."""
+    if not data:
+        return ""
+    from cryptography.fernet import Fernet
+    import base64
+    import hashlib
+    
+    crypt_key = key or settings.token_crypt_key or settings.secret_key or "default_mipoe_crypt_key"
+    hashed_key = hashlib.sha256(crypt_key.encode()).digest()
+    fernet_key = base64.urlsafe_b64encode(hashed_key)
+    f = Fernet(fernet_key)
+    return f.encrypt(data.encode()).decode()
+
+
+def decrypt_data(encrypted_data: str, key: str | None = None) -> str:
+    """Symmetrically decrypt cipher text using a hashed version of the system crypt key."""
+    if not encrypted_data:
+        return ""
+    from cryptography.fernet import Fernet
+    from cryptography.fernet import InvalidToken
+    import base64
+    import hashlib
+    
+    try:
+        crypt_key = key or settings.token_crypt_key or settings.secret_key or "default_mipoe_crypt_key"
+        hashed_key = hashlib.sha256(crypt_key.encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(hashed_key)
+        f = Fernet(fernet_key)
+        return f.decrypt(encrypted_data.encode()).decode()
+    except (InvalidToken, Exception):
+        return "[Decryption Error]"
+

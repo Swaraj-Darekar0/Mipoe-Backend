@@ -51,6 +51,23 @@ class Brand(Base):
     virtual_acc_ifsc: Mapped[str | None] = mapped_column(Text)
     virtual_vpa_id: Mapped[str | None] = mapped_column(Text)
     phone: Mapped[str | None] = mapped_column(String(20))
+    
+    # Onboarding and Compliance fields
+    onboarding_status: Mapped[str | None] = mapped_column(String(50), default="not_started", server_default=text("'not_started'"))
+    pan_number: Mapped[str | None] = mapped_column(Text)
+    pan_verification_status: Mapped[str | None] = mapped_column(String(50))
+    pan_holder_name: Mapped[str | None] = mapped_column(String(255))
+    business_address: Mapped[str | None] = mapped_column(Text)
+    logo_url: Mapped[str | None] = mapped_column(Text)
+    banner_url: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    instagram_url: Mapped[str | None] = mapped_column(Text)
+    youtube_url: Mapped[str | None] = mapped_column(Text)
+    website_url: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(100))
+    consent_given: Mapped[bool | None] = mapped_column(Boolean, default=False, server_default=text("false"))
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+
     campaigns: Mapped[list["Campaign"]] = relationship(back_populates="brand")
 
 
@@ -75,6 +92,7 @@ class Creator(Base):
     notifications: Mapped[list[dict] | None] = mapped_column(ARRAY(JSONB), nullable=True, server_default=text("'{}'::jsonb[]"))
     instagram_username: Mapped[str | None] = mapped_column(String)
     instagram_verified: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False, server_default=text("false"))
+    consent_given: Mapped[bool | None] = mapped_column(Boolean, default=False, server_default=text("false"))
 
 class Campaign(Base):
     __tablename__ = "campaign"
@@ -189,11 +207,14 @@ class AcceptedClip(Base):
     clip_url: Mapped[str] = mapped_column(String(300), nullable=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
     media_id: Mapped[str | None] = mapped_column(String(100))
-    view_count: Mapped[int | None] = mapped_column(Integer)
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    like_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    comment_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     caption: Mapped[str | None] = mapped_column(Text)
     instagram_posted_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_view_count: Mapped[int | None] = mapped_column(Integer, default=0, server_default=text("0"))
     amount_paid: Mapped[float | None] = mapped_column(Float, default=0.0, server_default=text("0.0"))
+    clip_thumbnail: Mapped[str | None] = mapped_column(Text)
 
 
 class SubmittedClip(Base):
@@ -204,5 +225,9 @@ class SubmittedClip(Base):
     campaign_id: Mapped[int] = mapped_column(ForeignKey("campaign.id", ondelete="CASCADE"), nullable=False)
     clip_url: Mapped[str] = mapped_column(String(300), nullable=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    like_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    comment_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     is_deleted_by_admin: Mapped[bool | None] = mapped_column(Boolean, default=False, server_default=text("false"))
     feedback: Mapped[str | None] = mapped_column(String(255))
+    clip_thumbnail: Mapped[str | None] = mapped_column(Text)

@@ -536,6 +536,29 @@ async def get_creator_notifications(
     return {"msg": "Notifications retrieved successfully", "notifications": notifications}
 
 
+@router.delete("/creator/notifications/{notification_id}")
+async def delete_creator_notification(
+    notification_id: str,
+    current_user: CurrentUser = Depends(require_role("creator")),
+    db: AsyncSession = Depends(get_db),
+):
+    creator = await db.get(Creator, current_user.id)
+    if not creator:
+        raise HTTPException(status_code=404, detail="Creator not found")
+
+    notifications = list(creator.notifications or [])
+    initial_len = len(notifications)
+    notifications = [n for n in notifications if n.get("id") != notification_id]
+
+    if len(notifications) == initial_len:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    creator.notifications = notifications
+    await db.commit()
+    return {"msg": "Notification deleted successfully"}
+
+
+
 @router.get("/transactions/{user_type}/{user_id}")
 async def get_transactions(
     user_type: str,
